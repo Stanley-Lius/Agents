@@ -34,6 +34,7 @@ We will use an SQLite database (`dining_history.db`) managed via the `mcp` Pytho
 - `get_user_profile(user_id)`
 - `get_recent_history(user_id, limit)`
 - `record_feedback(user_id, restaurant_data, feedback_reason)`
+- `clear_user_data(user_id)`
 
 ---
 
@@ -46,10 +47,10 @@ We will use an SQLite database (`dining_history.db`) managed via the `mcp` Pytho
 **Google Maps API:**
 - **Places API (New or Legacy):** Used for `Text Search` or `Nearby Search` to find restaurants.
 - **Distance Matrix API:** Used to verify the "within X minutes driving" constraint.
-- *Cost Control:* 
-  - Agent 2 will perform a broad Places API search first.
-  - It will filter results locally (in Python) based on basic criteria (rating, price level) before calling the more expensive Distance Matrix API to verify driving time.
-  - Results for generic queries will be cached locally in a simple dictionary to avoid duplicate API calls during the same session.
+- *Cost Control & Agent 2 Execution:* 
+  - Agent 2 performs a broad Places API search first and retrieves the top 5 highest-scored restaurants based on ratings and user review counts.
+  - It sequentially iterates through these candidates. If a candidate fails the strict LLM verification (e.g., closed today, doesn't match requirements), Agent 2 automatically evaluates the next best option.
+  - Only if all 5 candidates fail will Agent 2 return an error to Agent 1, triggering a re-plan or user prompt.
 
 ---
 

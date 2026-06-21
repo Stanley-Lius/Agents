@@ -1,8 +1,12 @@
-### 使用者偏好檔案
+### User Preferences
 
-- **偏好地點範圍基準**: 中興大學電機男生宿舍
-- **交通方式及距離**: 機車 5-10 分鐘
-- **餐飲偏好**:
-    - **喜好**: 偏健康、不刺激的料理
-    - **不喜好**: 有湯的料理, 麥味登
-- **價格敏感度**: 預算 150 元內
+#### Favorite Foods
+*   炸物類 (Fried foods)
+
+#### Price Sensitivity
+*   單次消費預算：150元以下 (Budget per single transaction: Under 150 NTD)
+
+#### Usual Locations
+*   中興大學男生宿舍附近 (Near National Chung Hsing University Male Dormitory)
+    *   交通方式：機車 (Transportation: Scooter)
+    *   距離/時間偏好：5-10分鐘車程內 (Distance/Time Preference: Within 5-10 minutes ride)

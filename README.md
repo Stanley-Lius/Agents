@@ -14,8 +14,10 @@ This project is built from the ground up focusing on rapid prototyping, seamless
    - **Agent 2 (The Executor)**: Specialized in querying external APIs (Google Maps) and visually analyzing menus to verify if real-world constraints (like current time and travel distance) are met.
 2. **Context Memory & Self-Improvement Loop**: 
    The system utilizes an **MCP (Model Context Protocol) SQLite Database Server** to persist user interactions. When a user accepts or rejects a recommendation, Agent 1 actively rewrites a Markdown preference profile ensuring the agent gets smarter over time.
-3. **Auto-Correction & Reflection**: 
-   If Agent 2 discovers a restaurant is closed upon arrival, it explicitly rejects the finding and asks Agent 1 to re-plan with relaxed constraints.
+3. **Auto-Correction & Reflection (Fallback Loop)**: 
+   If Agent 2 discovers a restaurant is closed upon arrival or doesn't match the criteria, it explicitly rejects the finding. Agent 2 then **iterates through a fallback list of the top 5 best-matching restaurants** before ultimately asking Agent 1 to re-plan with relaxed constraints if all candidates fail.
+4. **State Management & Reset**: 
+   The UI provides a direct control to reset the database and Markdown memory profiles while maintaining the underlying schema formats, demonstrating robust user data lifecycle control.
 
 ## 🛠️ System Architecture
 
