@@ -123,9 +123,11 @@ def run_agent1_planning(user_input: str, db_history: str, is_rejection: bool = F
     markdown_prefs = utils.load_user_markdown(DEFAULT_USER_ID)
     context_type = "REJECTION RE-PLANNING" if is_rejection else "NEW PROPOSAL"
     
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = f"""
     You are Agent 1, the Master Dining Planner.
     Context Type: {context_type}
+    Current Local Time: {current_time}
     
     User Input / Rejection Reason: "{user_input}"
     
@@ -137,11 +139,10 @@ def run_agent1_planning(user_input: str, db_history: str, is_rejection: bool = F
     
     Task: 
     1. Understand the user's intent, current constraints, and historical preferences.
-    2. STRICT RULE ON MEMORY: Memory is strictly for background reference. DO NOT blindly apply past preferences (e.g., specific foods or budgets) to the current request unless the user explicitly asks for them today.
-    3. STRICT RULE ON MISSING INFO: If the user does not specify a budget, time limit, or transportation method, default to NULL (omit them). Do NOT guess.
-    4. If the information provided is completely insufficient to make a basic search, or you need to clarify a critical constraint, output ONLY this tag: [ASK_USER: <your question here>]
-    5. If this is a REJECTION from Agent 2 or the User, you MUST propose a relaxed or alternative constraint. If you cannot broaden it safely without user input, use the [ASK_USER: <question>] tag.
-    6. Output a natural language briefing directed to Agent 2. The brief MUST clearly specify what Agent 2 needs to search for on Google Maps. Do NOT output JSON. Write a clear, conversational instruction.
+    2. RULE ON MISSING INFO & MEMORY: If the user's input is missing key constraints (e.g., location, budget, travel time/method), you MUST infer them from the Recent DB History and Markdown Preferences. For example: if location is missing, use their most frequently visited location; if budget is missing, use their average past budget; if travel time is missing, use an estimated average from past records. 
+    3. STRICT RULE ON EXPLICIT CONSTRAINTS: If the user PROVIDES explicit constraints (e.g., specific location, budget, or time), you MUST strictly adhere to them. Do not let past memory override or overly influence the decision. EVEN IF this is a REJECTION and you are relaxing constraints, prioritize the user's explicitly stated constraints and do not automatically revert to past memory.
+    4. If the information provided is completely insufficient to make a basic search even with history, or you need to clarify a critical constraint, output ONLY this tag: [ASK_USER: <your question here>]
+    5. Output a natural language briefing directed to Agent 2. The brief MUST clearly specify what Agent 2 needs to search for on Google Maps, and MUST include the estimated travel time and the Current Local Time so Agent 2 can check opening hours. Do NOT output JSON. Write a clear, conversational instruction.
     """
     
     try:
@@ -214,12 +215,15 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
             public_url = f"https://places.googleapis.com/v1/{p_name}/media?maxWidthPx=800&key={maps_api_key}"
             photo_urls_mapping += f"\nImage {i+1} Public URL: {public_url}"
             
+    current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     analysis_prompt = f"""
     You are Agent 2. You have retrieved the following restaurant data from Google Maps API (New):
     Name: {map_results.get('name')}
     Address: {map_results.get('address')}
     Phone: {map_results.get('phone_number')}
     Today's Hours: {todays_hours}
+    Current Local Time: {current_time_str}
     Maps URL: {map_results.get('google_maps_uri')}
     Top Reviews: {map_results.get('reviews')}
     
@@ -227,7 +231,7 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
     {agent1_briefing}
     
     Task:
-    1. STRICT VERIFICATION: Verify if the restaurant TRULY matches Agent 1's core requirements (e.g., all-you-can-eat, specific food type). If it drastically fails, output ONLY this tag: [REJECT_AND_ASK_AGENT1: <Reason why it failed>]. Do not output anything else.
+    1. STRICT VERIFICATION: Verify if the restaurant TRULY matches Agent 1's core requirements. Critically, you MUST check the "Today's Hours" against the "Current Local Time" and consider the travel time mentioned in Agent 1's briefing. Ensure the restaurant will still be open and serving food by the time the user arrives. If it is closed, will close too soon, or drastically fails other requirements (e.g., all-you-can-eat, specific food type), output ONLY this tag: [REJECT_AND_ASK_AGENT1: <Reason why it failed>]. Do not output anything else.
     2. Analyze the {len(photo_parts)} menu/food photos provided. Here are their public URLs: {photo_urls_mapping}
     3. If the photos are insufficient to find exact prices for the 3 menus, use your `google_search` tool to search for "{map_results.get('name')} menu prices".
     4. Output a detailed text summary of the Top 3 menus and their exact prices.
@@ -291,15 +295,21 @@ if "current_recommendation" not in st.session_state:
     st.session_state.current_recommendation = None
 if "agent1_briefing" not in st.session_state:
     st.session_state.agent1_briefing = None
+if "system_message" not in st.session_state:
+    st.session_state.system_message = None
 
 st.title("🍽️ Concierge Dining Advisor")
 st.markdown("Powered by Multi-Agent Auto-Correction & Feedback Loops")
+
+if st.session_state.system_message:
+    st.warning(st.session_state.system_message)
 
 user_input = st.chat_input("請輸入您的用餐需求...")
 
 if user_input:
     st.session_state.trajectory.append(f"User: {user_input}")
     st.session_state.current_recommendation = None # clear old
+    st.session_state.system_message = None # clear old message
     
     with st.spinner("Fetching DB History..."):
         db_history = asyncio.run(fetch_db_history())
@@ -309,9 +319,11 @@ if user_input:
         a1_result = run_agent1_planning(user_input, db_history, is_rejection=False)
         
     if a1_result["status"] == "error":
-        st.error(a1_result["message"])
+        st.session_state.system_message = a1_result["message"]
+        st.rerun()
     elif a1_result["status"] == "ask_user":
-        st.warning(f"🤔 **助理需要更多資訊:**\n\n{a1_result['message']}")
+        st.session_state.system_message = f"🤔 **助理需要更多資訊:**\n\n{a1_result['message']}"
+        st.rerun()
     else:
         st.session_state.agent1_briefing = a1_result["briefing"]
         
@@ -319,23 +331,33 @@ if user_input:
             a2_result = run_agent2_execution(st.session_state.agent1_briefing)
             
         if a2_result["status"] == "needs_more_info":
-            st.warning(f"🔄 **找到的餐廳不符要求 ({a2_result['reason']})，正在請 Agent 1 重新規劃條件...**")
-            with st.spinner("Agent 1 is re-planning with relaxed constraints..."):
+            with st.spinner(f"🔄 **找到的餐廳不符要求 ({a2_result['reason']})，正在請 Agent 1 重新規劃條件...**"):
                 a1_result_retry = run_agent1_planning(f"Agent 2 rejected the finding because: {a2_result['reason']}. Please propose a broader or different search constraint. If impossible, ask the user.", db_history, is_rejection=True)
                 
                 if a1_result_retry["status"] == "ask_user":
-                    st.warning(f"🤔 **助理需要您的協助:**\n\n{a1_result_retry['message']}")
+                    st.session_state.system_message = f"🤔 **助理需要您的協助:**\n\n{a1_result_retry['message']}"
+                    st.rerun()
                 elif a1_result_retry["status"] == "success":
                     with st.spinner("Agent 2 is searching again with new constraints..."):
                         a2_result_retry = run_agent2_execution(a1_result_retry["briefing"])
                         if a2_result_retry["status"] == "success":
                             st.session_state.current_recommendation = a2_result_retry["recommendation"]
+                            st.rerun()
                         elif a2_result_retry["status"] == "needs_more_info":
-                             st.error("❌ 抱歉，即使放寬條件仍然找不到合適的餐廳。請嘗試更換地點或條件。")
+                             st.session_state.system_message = "❌ 抱歉，即使放寬條件仍然找不到合適的餐廳。請嘗試更換地點或條件。"
+                             st.rerun()
+                        else:
+                             st.session_state.system_message = a2_result_retry.get("message", "Error executing agent 2 retry")
+                             st.rerun()
+                else:
+                     st.session_state.system_message = a1_result_retry.get("message", "Error executing agent 1 retry")
+                     st.rerun()
         elif a2_result["status"] == "error":
-            st.error(a2_result["message"])
+            st.session_state.system_message = a2_result["message"]
+            st.rerun()
         else:
             st.session_state.current_recommendation = a2_result["recommendation"]
+            st.rerun()
 
 # Display Recommendation & Feedback Loop
 if st.session_state.current_recommendation:
@@ -391,7 +413,24 @@ if st.session_state.current_recommendation:
                         a2_result = run_agent2_execution(st.session_state.agent1_briefing)
                         if a2_result["status"] == "success":
                             st.session_state.current_recommendation = a2_result["recommendation"]
+                            st.session_state.system_message = None
                             st.rerun()
+                        elif a2_result["status"] == "needs_more_info":
+                            st.session_state.current_recommendation = None
+                            st.session_state.system_message = "❌ 抱歉，即使放寬條件仍然找不到合適的餐廳。請嘗試更換地點或條件。"
+                            st.rerun()
+                        else:
+                            st.session_state.current_recommendation = None
+                            st.session_state.system_message = a2_result.get("message", "Error finding new restaurant")
+                            st.rerun()
+                elif a1_result["status"] == "ask_user":
+                    st.session_state.current_recommendation = None
+                    st.session_state.system_message = f"🤔 **助理需要您的協助:**\n\n{a1_result['message']}"
+                    st.rerun()
+                else:
+                    st.session_state.current_recommendation = None
+                    st.session_state.system_message = a1_result.get("message", "Agent 1 Error")
+                    st.rerun()
 
 # Sidebar Trajectory
 with st.sidebar:

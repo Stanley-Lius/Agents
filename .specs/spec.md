@@ -28,6 +28,8 @@ We will use an SQLite database (`dining_history.db`) managed via the `mcp` Pytho
 - `users`: `user_id`, `name`, `general_preferences`
 - `dining_history`: `record_id`, `user_id`, `restaurant_name`, `food_type`, `price`, `timestamp`, `user_rating` (accept/reject), `feedback_reason`
 
+**Null value:** Information not provided by the user is always set to null in the database.
+
 **MCP Tools Provided:**
 - `get_user_profile(user_id)`
 - `get_recent_history(user_id, limit)`
