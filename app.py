@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
@@ -120,7 +121,6 @@ def run_agent1_planning(user_input: str, db_history: str, is_rejection: bool = F
         return {"status": "error", "message": "Gemini Client not initialized."}
         
     markdown_prefs = utils.load_user_markdown(DEFAULT_USER_ID)
-    
     context_type = "REJECTION RE-PLANNING" if is_rejection else "NEW PROPOSAL"
     
     prompt = f"""
@@ -137,9 +137,11 @@ def run_agent1_planning(user_input: str, db_history: str, is_rejection: bool = F
     
     Task: 
     1. Understand the user's intent, current constraints, and historical preferences.
-    2. If this is a REJECTION, you MUST propose a relaxed or alternative constraint that aligns with their past habits.
-    3. You have the `google_search` tool enabled. Use it to find features (e.g., "cooling foods near Taichung Park").
-    4. Output a natural language briefing directed to Agent 2. The brief MUST clearly specify what Agent 2 needs to search for on Google Maps. Do NOT output JSON. Write a clear, conversational instruction.
+    2. STRICT RULE ON MEMORY: Memory is strictly for background reference. DO NOT blindly apply past preferences (e.g., specific foods or budgets) to the current request unless the user explicitly asks for them today.
+    3. STRICT RULE ON MISSING INFO: If the user does not specify a budget, time limit, or transportation method, default to NULL (omit them). Do NOT guess.
+    4. If the information provided is completely insufficient to make a basic search, or you need to clarify a critical constraint, output ONLY this tag: [ASK_USER: <your question here>]
+    5. If this is a REJECTION from Agent 2 or the User, you MUST propose a relaxed or alternative constraint. If you cannot broaden it safely without user input, use the [ASK_USER: <question>] tag.
+    6. Output a natural language briefing directed to Agent 2. The brief MUST clearly specify what Agent 2 needs to search for on Google Maps. Do NOT output JSON. Write a clear, conversational instruction.
     """
     
     try:
@@ -152,13 +154,19 @@ def run_agent1_planning(user_input: str, db_history: str, is_rejection: bool = F
             )
         )
         briefing = response.text
+        
         if "SECURITY_ALERT" in briefing:
             st.session_state.trajectory.append("Agent 1: SECURITY ALERT. Prompt Injection detected.")
             return {"status": "error", "message": "Malicious input detected."}
             
+        if "[ASK_USER:" in briefing:
+            match = re.search(r'\[ASK_USER:\s*(.*?)\]', briefing, re.DOTALL)
+            question = match.group(1).strip() if match else "請問您有更具體的需求嗎？"
+            st.session_state.trajectory.append(f"Agent 1 asks User: {question}")
+            return {"status": "ask_user", "message": question}
+            
         st.session_state.trajectory.append(f"Agent 1 Briefing: {briefing}")
         
-        # Update Markdown with the user's latest query
         if not is_rejection:
             update_user_preferences_markdown(f"User explicitly requested: {user_input}")
             
@@ -170,7 +178,6 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
     if not gemini_client:
         return {"status": "error", "message": "Gemini Client not initialized."}
         
-    # Step 1: Generate Map Query
     try:
         query_res = gemini_client.models.generate_content(
             model=MODEL_NAME,
@@ -186,31 +193,27 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": f"Agent 2 Query Gen failed: {e}"}
         
-    # Step 2: Execute Map Search
     map_results = map_search.search_google_maps(map_query)
     if "error" in map_results:
-        return {"status": "error", "message": f"Map Search Failed: {map_results['error']}"}
+        return {"status": "needs_more_info", "reason": f"Map Search Failed: {map_results['error']}"}
         
     st.session_state.trajectory.append(f"Agent 2: Found restaurant {map_results.get('name')}")
     
-    # Calculate Today's Hours
     today_index = datetime.datetime.today().weekday()
     hours_list = map_results.get('opening_hours', [])
     todays_hours = hours_list[today_index] if today_index < len(hours_list) else "今日營業時間未知"
     
-    # Step 3: Fetch Photos and map URLs
     photo_parts = []
     photo_urls_mapping = ""
     maps_api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     
-    for i, p_name in enumerate(map_results.get("photo_names", [])[:2]): # Max 2 photos
+    for i, p_name in enumerate(map_results.get("photo_names", [])[:2]): 
         bytes_data = map_search.fetch_photo_bytes(p_name)
         if bytes_data:
             photo_parts.append(types.Part.from_bytes(data=bytes_data, mime_type="image/jpeg"))
             public_url = f"https://places.googleapis.com/v1/{p_name}/media?maxWidthPx=800&key={maps_api_key}"
             photo_urls_mapping += f"\nImage {i+1} Public URL: {public_url}"
             
-    # Step 4a: Multimodal + Web Search (No JSON)
     analysis_prompt = f"""
     You are Agent 2. You have retrieved the following restaurant data from Google Maps API (New):
     Name: {map_results.get('name')}
@@ -224,17 +227,17 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
     {agent1_briefing}
     
     Task:
-    1. Analyze the {len(photo_parts)} menu/food photos provided. Here are their public URLs: {photo_urls_mapping}
-    2. If the photos are insufficient to find exact prices for the 3 menus, use your `google_search` tool to search for "{map_results.get('name')} menu prices".
-    3. Output a detailed text summary of the Top 3 menus and their exact prices.
-    4. Provide your reasoning based on Agent 1's briefing (strictly limit reasoning to under 50 Chinese characters).
-    5. If you cannot find exact prices from web or photos, and one of the images provided is a Menu, specify its Public URL so we can show it to the user.
+    1. STRICT VERIFICATION: Verify if the restaurant TRULY matches Agent 1's core requirements (e.g., all-you-can-eat, specific food type). If it drastically fails, output ONLY this tag: [REJECT_AND_ASK_AGENT1: <Reason why it failed>]. Do not output anything else.
+    2. Analyze the {len(photo_parts)} menu/food photos provided. Here are their public URLs: {photo_urls_mapping}
+    3. If the photos are insufficient to find exact prices for the 3 menus, use your `google_search` tool to search for "{map_results.get('name')} menu prices".
+    4. Output a detailed text summary of the Top 3 menus and their exact prices.
+    5. Provide your reasoning based on Agent 1's briefing (strictly limit reasoning to under 50 Chinese characters).
+    6. If you cannot find exact prices from web or photos, and one of the images provided is a Menu, specify its Public URL so we can show it to the user.
     """
     
     contents = [analysis_prompt] + photo_parts
     
     try:
-        # 4a: Tools, NO JSON
         analysis_response = gemini_client.models.generate_content(
             model=MODEL_NAME,
             contents=contents,
@@ -245,7 +248,12 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
         )
         raw_analysis = analysis_response.text
         
-        # Step 4b: JSON Formatting (No Tools)
+        if "[REJECT_AND_ASK_AGENT1:" in raw_analysis:
+            match = re.search(r'\[REJECT_AND_ASK_AGENT1:\s*(.*?)\]', raw_analysis, re.DOTALL)
+            reason = match.group(1).strip() if match else "餐廳不符合核心需求"
+            st.session_state.trajectory.append(f"Agent 2 Rejected result. Reason: {reason}")
+            return {"status": "needs_more_info", "reason": reason}
+        
         format_prompt = f"""
         Format the following restaurant analysis into the required JSON schema.
         Restaurant Name: {map_results.get('name')}
@@ -275,7 +283,7 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
         return {"status": "error", "message": f"Agent 2 Execution failed: {e}"}
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="Concierge Dining Advisor - Fast Decision", layout="wide")
+st.set_page_config(page_title="Concierge Dining Advisor", layout="wide")
 
 if "trajectory" not in st.session_state:
     st.session_state.trajectory = []
@@ -284,13 +292,14 @@ if "current_recommendation" not in st.session_state:
 if "agent1_briefing" not in st.session_state:
     st.session_state.agent1_briefing = None
 
-st.title("🍽️ Concierge Dining Advisor (Fast Decision UI)")
-st.markdown("Powered by Gemini 2.5 Flash, Places API (New), and Markdown Memory.")
+st.title("🍽️ Concierge Dining Advisor")
+st.markdown("Powered by Multi-Agent Auto-Correction & Feedback Loops")
 
-user_input = st.chat_input("請輸入您的用餐需求 (例如：在台中一中街附近的公園，想吃解暑料理、不能吃花生)")
+user_input = st.chat_input("請輸入您的用餐需求...")
 
 if user_input:
     st.session_state.trajectory.append(f"User: {user_input}")
+    st.session_state.current_recommendation = None # clear old
     
     with st.spinner("Fetching DB History..."):
         db_history = asyncio.run(fetch_db_history())
@@ -301,13 +310,29 @@ if user_input:
         
     if a1_result["status"] == "error":
         st.error(a1_result["message"])
+    elif a1_result["status"] == "ask_user":
+        st.warning(f"🤔 **助理需要更多資訊:**\n\n{a1_result['message']}")
     else:
         st.session_state.agent1_briefing = a1_result["briefing"]
         
-        with st.spinner("Agent 2 is executing Maps API and analyzing menus..."):
+        with st.spinner("Agent 2 is executing Maps API and verifying requirements..."):
             a2_result = run_agent2_execution(st.session_state.agent1_briefing)
             
-        if a2_result["status"] == "error":
+        if a2_result["status"] == "needs_more_info":
+            st.warning(f"🔄 **找到的餐廳不符要求 ({a2_result['reason']})，正在請 Agent 1 重新規劃條件...**")
+            with st.spinner("Agent 1 is re-planning with relaxed constraints..."):
+                a1_result_retry = run_agent1_planning(f"Agent 2 rejected the finding because: {a2_result['reason']}. Please propose a broader or different search constraint. If impossible, ask the user.", db_history, is_rejection=True)
+                
+                if a1_result_retry["status"] == "ask_user":
+                    st.warning(f"🤔 **助理需要您的協助:**\n\n{a1_result_retry['message']}")
+                elif a1_result_retry["status"] == "success":
+                    with st.spinner("Agent 2 is searching again with new constraints..."):
+                        a2_result_retry = run_agent2_execution(a1_result_retry["briefing"])
+                        if a2_result_retry["status"] == "success":
+                            st.session_state.current_recommendation = a2_result_retry["recommendation"]
+                        elif a2_result_retry["status"] == "needs_more_info":
+                             st.error("❌ 抱歉，即使放寬條件仍然找不到合適的餐廳。請嘗試更換地點或條件。")
+        elif a2_result["status"] == "error":
             st.error(a2_result["message"])
         else:
             st.session_state.current_recommendation = a2_result["recommendation"]
@@ -335,18 +360,17 @@ if st.session_state.current_recommendation:
         st.markdown("#### 📸 最新菜單參考")
         st.image(rec['menu_photo_url'], caption="餐廳菜單", use_container_width=True)
     
-    # HITL Action Buttons
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("##### 為這次的推薦評分 (0-5星)")
         rating = st.feedback("stars")
         if rating is not None:
-            actual_rating = rating + 1 # st.feedback is 0-indexed (0-4), we want 1-5
+            actual_rating = rating + 1 
             st.write(f"您給了 {actual_rating} 顆星！正在更新您的喜好紀錄...")
             asyncio.run(write_db_feedback(f"Accepted {rec['restaurant_name']}", actual_rating))
             update_user_preferences_markdown(f"User rated the recommendation '{rec['restaurant_name']}' {actual_rating} out of 5 stars.")
-            st.session_state.current_recommendation = None # Reset
+            st.session_state.current_recommendation = None 
             st.rerun()
             
     with col2:
