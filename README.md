@@ -18,6 +18,8 @@ This project is built from the ground up focusing on rapid prototyping, seamless
    If Agent 2 discovers a restaurant is closed upon arrival or doesn't match the criteria, it explicitly rejects the finding. Agent 2 then **iterates through a fallback list of the top 5 best-matching restaurants** before ultimately asking Agent 1 to re-plan with relaxed constraints if all candidates fail.
 4. **State Management & Reset**: 
    The UI provides a direct control to reset the database and Markdown memory profiles while maintaining the underlying schema formats, demonstrating robust user data lifecycle control.
+5. **Transparent Trajectory Tracing**:
+   The web UI features a real-time `Trajectory` sidebar that logs the internal thoughts, actions, and rejections of both agents. This provides deep visibility into the agentic workflow, helping users understand exactly how the system dynamically evaluates and arrives at its final decision.
 
 ## 🛠️ System Architecture
 
