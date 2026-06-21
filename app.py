@@ -465,9 +465,22 @@ if st.session_state.current_recommendation:
                     st.session_state.system_message = a1_result.get("message", "Agent 1 Error")
                     st.rerun()
 
+@st.dialog("✏️ 編輯使用者偏好 Markdown")
+def edit_markdown_dialog():
+    current_content = utils.load_user_markdown(DEFAULT_USER_ID)
+    new_content = st.text_area("Markdown 內容", value=current_content, height=400)
+    if st.button("💾 儲存 (Save)", use_container_width=True):
+        utils.save_user_markdown(DEFAULT_USER_ID, new_content)
+        st.session_state.trajectory.append("System: User updated their Markdown preferences manually.")
+        st.rerun()
+
 # Sidebar Trajectory
 with st.sidebar:
     st.header("⚙️ Settings")
+    
+    if st.button("✏️ 編輯使用者偏好 Markdown", use_container_width=True):
+        edit_markdown_dialog()
+        
     if st.button("🗑️ Reset User Data", use_container_width=True):
         utils.save_user_markdown(DEFAULT_USER_ID, "尚無此使用者的歷史偏好紀錄。")
         asyncio.run(clear_db_data())
