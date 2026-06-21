@@ -83,3 +83,18 @@ cd agent
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+## 📝 Citation
+
+If you use this project or find it helpful, please cite it:
+
+```bibtex
+@software{lius2026concierge,
+  author = {Stanley Lius},
+  title = {Concierge Dining Advisor - AI Agents Intensive Vibe Coding Capstone},
+  year = {2026},
+  url = {https://github.com/Stanley-Lius/personal-dining-agents},
+  version = {1.0.0}
+}
+```
+*(A `CITATION.cff` file is also included in the repository for standard GitHub citation generation.)*

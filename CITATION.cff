@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software in your research or project, please cite it as below."
+authors:
+  - family-names: "Lius"
+    given-names: "Stanley"
+    alias: "w550954"
+title: "Concierge Dining Advisor - AI Agents Intensive Vibe Coding Capstone"
+version: 1.0.0
+date-released: 2026-06-21
+url: "https://github.com/Stanley-Lius/personal-dining-agents"
+repository-code: "https://github.com/Stanley-Lius/personal-dining-agents"
+abstract: "An autonomous multi-agent dining concierge designed for the Kaggle AI Agents: Intensive Vibe Coding Capstone Project. It leverages Agentic Engineering, Vibe Coding, and a local MCP Server with dual-memory architecture to deliver personalized, real-time dining recommendations."
+keywords:
+  - AI Agents
+  - Model Context Protocol
+  - LLM
+  - Gemini
+  - Streamlit
+  - Vibe Coding
