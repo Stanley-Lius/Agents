@@ -6,6 +6,7 @@ import streamlit as st
 import json
 import logging
 import asyncio
+import datetime
 from pydantic import BaseModel, Field
 
 # MCP and Google GenAI imports
@@ -47,10 +48,11 @@ class RichRestaurantRecommendation(BaseModel):
     restaurant_name: str
     google_maps_url: str
     phone_number: str
-    opening_hours: list[str]
+    todays_hours: str
     useful_reviews: list[str]
     top_3_menus: list[MenuRecommendation]
-    agent2_reasoning: str
+    agent2_reasoning: str = Field(description="Recommendation reasoning. Strictly under 50 Chinese characters.")
+    menu_photo_url: str | None = Field(default=None, description="URL of the menu photo if exact prices were not found.")
 
 # --- Core Logic ---
 
@@ -191,12 +193,22 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
         
     st.session_state.trajectory.append(f"Agent 2: Found restaurant {map_results.get('name')}")
     
-    # Step 3: Fetch Photos
+    # Calculate Today's Hours
+    today_index = datetime.datetime.today().weekday()
+    hours_list = map_results.get('opening_hours', [])
+    todays_hours = hours_list[today_index] if today_index < len(hours_list) else "今日營業時間未知"
+    
+    # Step 3: Fetch Photos and map URLs
     photo_parts = []
-    for p_name in map_results.get("photo_names", [])[:2]: # Max 2 photos to save latency
+    photo_urls_mapping = ""
+    maps_api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    
+    for i, p_name in enumerate(map_results.get("photo_names", [])[:2]): # Max 2 photos
         bytes_data = map_search.fetch_photo_bytes(p_name)
         if bytes_data:
             photo_parts.append(types.Part.from_bytes(data=bytes_data, mime_type="image/jpeg"))
+            public_url = f"https://places.googleapis.com/v1/{p_name}/media?maxWidthPx=800&key={maps_api_key}"
+            photo_urls_mapping += f"\nImage {i+1} Public URL: {public_url}"
             
     # Step 4a: Multimodal + Web Search (No JSON)
     analysis_prompt = f"""
@@ -204,7 +216,7 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
     Name: {map_results.get('name')}
     Address: {map_results.get('address')}
     Phone: {map_results.get('phone_number')}
-    Hours: {map_results.get('opening_hours')}
+    Today's Hours: {todays_hours}
     Maps URL: {map_results.get('google_maps_uri')}
     Top Reviews: {map_results.get('reviews')}
     
@@ -212,9 +224,11 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
     {agent1_briefing}
     
     Task:
-    1. Analyze the {len(photo_parts)} menu/food photos provided.
+    1. Analyze the {len(photo_parts)} menu/food photos provided. Here are their public URLs: {photo_urls_mapping}
     2. If the photos are insufficient to find exact prices for the 3 menus, use your `google_search` tool to search for "{map_results.get('name')} menu prices".
-    3. Output a detailed text summary of the Top 3 menus and their exact prices, and your reasoning based on Agent 1's briefing.
+    3. Output a detailed text summary of the Top 3 menus and their exact prices.
+    4. Provide your reasoning based on Agent 1's briefing (strictly limit reasoning to under 50 Chinese characters).
+    5. If you cannot find exact prices from web or photos, and one of the images provided is a Menu, specify its Public URL so we can show it to the user.
     """
     
     contents = [analysis_prompt] + photo_parts
@@ -237,10 +251,10 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
         Restaurant Name: {map_results.get('name')}
         Google Maps URL: {map_results.get('google_maps_uri')}
         Phone: {map_results.get('phone_number')}
-        Hours: {map_results.get('opening_hours')}
+        Today's Hours: {todays_hours}
         Reviews: {map_results.get('reviews')}
         
-        Detailed Analysis (contains menus, prices, and reasoning):
+        Detailed Analysis (contains menus, prices, reasoning, and optional menu_photo_url):
         {raw_analysis}
         """
         
@@ -261,7 +275,7 @@ def run_agent2_execution(agent1_briefing: str) -> dict:
         return {"status": "error", "message": f"Agent 2 Execution failed: {e}"}
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="Concierge Dining Advisor - Advanced", layout="wide")
+st.set_page_config(page_title="Concierge Dining Advisor - Fast Decision", layout="wide")
 
 if "trajectory" not in st.session_state:
     st.session_state.trajectory = []
@@ -270,7 +284,7 @@ if "current_recommendation" not in st.session_state:
 if "agent1_briefing" not in st.session_state:
     st.session_state.agent1_briefing = None
 
-st.title("🍽️ Concierge Dining Advisor (Advanced Multi-Agent)")
+st.title("🍽️ Concierge Dining Advisor (Fast Decision UI)")
 st.markdown("Powered by Gemini 2.5 Flash, Places API (New), and Markdown Memory.")
 
 user_input = st.chat_input("請輸入您的用餐需求 (例如：在台中一中街附近的公園，想吃解暑料理、不能吃花生)")
@@ -301,12 +315,11 @@ if user_input:
 # Display Recommendation & Feedback Loop
 if st.session_state.current_recommendation:
     rec = st.session_state.current_recommendation
+    
     st.success(f"### 🎉 推薦餐廳：{rec['restaurant_name']}")
     st.markdown(f"**📍 導航:** [Google Maps]({rec['google_maps_url']}) | **📞 電話:** {rec['phone_number']}")
-    
-    st.markdown("#### 🕒 營業時間")
-    for h in rec['opening_hours']:
-        st.write(f"- {h}")
+    st.markdown(f"**🕒 今日營業時間:** {rec['todays_hours']}")
+    st.markdown(f"**💡 推薦理由:** {rec['agent2_reasoning']}")
         
     st.markdown("#### 🗣️ 精選評論")
     for r in rec['useful_reviews']:
@@ -318,9 +331,12 @@ if st.session_state.current_recommendation:
         with cols[idx]:
             st.warning(f"**{menu['dish_name']}**\n\n💰 {menu['exact_price']}\n\n_{menu['description']}_")
             
-    st.markdown(f"**💡 Agent 2 推薦理由:** {rec['agent2_reasoning']}")
+    if rec.get('menu_photo_url'):
+        st.markdown("#### 📸 最新菜單參考")
+        st.image(rec['menu_photo_url'], caption="餐廳菜單", use_container_width=True)
     
     # HITL Action Buttons
+    st.divider()
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("##### 為這次的推薦評分 (0-5星)")
