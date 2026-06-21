@@ -150,6 +150,20 @@ def record_dining_feedback(
     conn.close()
     return f"Successfully recorded {status} feedback for restaurant '{restaurant_name}'."
 
+@mcp.tool()
+def clear_user_data(user_id: str) -> str:
+    """
+    Clear the user's history and preferences from the database.
+    """
+    logger.info(f"[AUDIT] Tool Called: clear_user_data for user_id={user_id}")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM dining_history WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return f"Successfully cleared all database records for user {user_id}."
+
 if __name__ == "__main__":
     # Initialize DB before starting server
     init_db()

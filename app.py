@@ -94,6 +94,20 @@ async def write_db_feedback(feedback_text: str, rating: int):
     except Exception as e:
         logger.error(f"MCP DB Write failed: {e}")
 
+async def clear_db_data():
+    server_params = StdioServerParameters(
+        command="python",
+        args=["src/db_mcp_server.py"],
+        env=os.environ.copy()
+    )
+    try:
+        async with stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                await session.call_tool("clear_user_data", arguments={"user_id": DEFAULT_USER_ID})
+    except Exception as e:
+        logger.error(f"MCP DB Clear failed: {e}")
+
 def update_user_preferences_markdown(context_update: str):
     old_md = utils.load_user_markdown(DEFAULT_USER_ID)
     prompt = f"""
@@ -442,6 +456,16 @@ if st.session_state.current_recommendation:
 
 # Sidebar Trajectory
 with st.sidebar:
+    st.header("⚙️ Settings")
+    if st.button("🗑️ Reset User Data", use_container_width=True):
+        utils.save_user_markdown(DEFAULT_USER_ID, "尚無此使用者的歷史偏好紀錄。")
+        asyncio.run(clear_db_data())
+        st.session_state.trajectory = ["System: User data has been completely reset."]
+        st.session_state.current_recommendation = None
+        st.session_state.system_message = "✅ Data successfully reset!"
+        st.rerun()
+
+    st.divider()
     st.header("🧠 Multi-Agent Trajectory")
     for msg in st.session_state.trajectory:
         st.write(f"- {msg}")
